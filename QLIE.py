@@ -15,17 +15,19 @@ class Run(object):
     """
     Setup plain MD simulations for LIE calcuations
     """
-    def __init__(self, ligand, cofactor, forcefield, include, system,
+    def __init__(self, ligand, cofactor, forcefield, include, system, timestep,
                  preplocation, cluster, temperature, replicates,
-                 radius, time,
+                 radius, time, scale,
                  *args, **kwargs):
         # Argparse arguments
         self.ligand         = ligand
         self.cofactor       = [ligand]
+        self.timestep = timestep
         self.forcefield     = forcefield
         self.system         = system
         self.preplocation   = preplocation
         self.cluster        = cluster
+        self.scale          = scale
         if temperature == None:
             self.temperature = s.TEMPERATURE
             
@@ -91,11 +93,14 @@ class Run(object):
                 line = line.split()
                 if len(line) > 1:
                     if line[1] == 'center:':
-                        self.sphere = line[2:]
+                        self.sphere = [float(coord) for coord in line[2:]]
                         
                     if line[1] == 'radius:':
                         self.radius = line[2]
                         self.replacements['SPHERE'] = self.radius
+                    
+                    if line[1] == 'charge':
+                        self.charge = int(line[4])
                         
                     if line[0] == 'Q_CYS1':
                         block = 1
@@ -109,9 +114,10 @@ class Run(object):
                     if block == 1:
                         if line[0].isdigit():
                             self.CYX.append([line[0], line[1]])
-                        
-                    if block == 2:
-                        self.PDB2Q[line[1]] = line[0]        
+
+                    if block == 2 and (len(line) == 3 or len(line) == 4):
+                        chain = ' ' if len(line) == 3 else line[2]
+                        self.PDB2Q.setdefault(chain, {})[line[1]] = line[0]       
 
     def read_pdb(self):
         atnr = 0
@@ -215,7 +221,6 @@ class Run(object):
                         outfile.write(IO.pdb_parse_out(water) + '\n')                    
                     
     def write_qprep(self):
-#        replacements = {'PRM':s.FF_DIR+'/'+self.forcefield+'.prm', #self.prm_merged,
         replacements = {'PRM':self.prm_merged,
                         'PDB':self.PDBout,
                         'CENTER':'{} {} {}'.format(*self.sphere),
@@ -230,6 +235,9 @@ class Run(object):
         elif self.system == 'vacuum':
             replacements['solvate']='!solvate'
         
+        target_density = f.get_density('protein.pdb', self.sphere, self.radius)
+        replacements['SOLUTEDENS'] = f'{target_density:.5f}'
+
         src = s.INPUT_DIR + '/qprep_QresFEP.inp'
         self.qprep = self.directory + '/inputfiles/qprep.inp'
         libraries = [self.forcefield + '.lib']
@@ -255,12 +263,9 @@ class Run(object):
                 
     def run_qprep(self):
         os.chdir(self.directory + '/inputfiles/')
-        qprep = '/home/apps/apps/Q/5.10.1/bin/qprep5' # use either qprep / Qprep6
-        options = ' < qprep.inp > qprep.out'         # based on Q version to use
-        # Somehow Q is very annoying with this < > input style so had to implement
-        # another function that just calls os.system instead of using the preferred
-        # subprocess module....
-        IO.run_command(qprep, options, string = True)
+        q_commands = getattr(s, self.preplocation)
+        qprep = q_commands['QPREP']
+        os.system(f'{qprep} < qprep.inp > qprep.out')
         os.chdir('../../')                
     def write_EQ(self):
         # If water or vacuum system, apply restrain on ligand
@@ -276,8 +281,10 @@ class Run(object):
         self.replacements['ATOM_END'] = '{}'.format(self.systemsize)
         self.replacements['ATOM_START_LIG1'] = '{}'.format(1)
         self.replacements['EQ_LAMBDA'] = '1.000 0.000'
+        self.replacements['DIST'] = ''
+        self.replacements['WALL'] = ''
         
-        for EQ_file in glob.glob(s.INPUT_DIR + '_old/eq*.inp'):
+        for EQ_file in glob.glob(s.INPUT_DIR + '/eq*.inp'):
             src = EQ_file
             EQ_file = EQ_file.split('/')
             tgt = self.directory + '/inputfiles/' + EQ_file[-1]
@@ -288,7 +295,7 @@ class Run(object):
                     
     def write_MD(self):
         self.replacements['FILE_N'] = 'eq5'
-        src = s.INPUT_DIR + '_old/md_LIE_XXX.inp'
+        src = s.INPUT_DIR + '/md_LIE_XXX.inp'
         for i in range(1, self.time):
             tgt = self.directory + '/inputfiles/md_LIE_{:03d}.inp'.format(i)
             self.replacements['FILE'] = 'md_LIE_{:03d}'.format(i)
@@ -302,8 +309,12 @@ class Run(object):
         
     def write_runfile(self):
         ntasks = getattr(s, self.cluster)['NTASKS']
-        src = s.INPUT_DIR + '_old/run.sh'
-        tgt = self.directory + '/inputfiles/run' + self.cluster + '.sh'
+        if self.scale == 'largescale':
+            src = s.INPUT_DIR + '/run_LIE_largescale.sh'
+            tgt = self.directory + '/inputfiles/run' + self.cluster + '.sh'
+        else:
+            src = s.INPUT_DIR + '/run.sh'
+            tgt = self.directory + '/inputfiles/run' + self.cluster + '.sh'
         EQ_files = sorted(glob.glob(self.directory + '/inputfiles/eq*.inp'))
 
         MD_files = sorted(glob.glob(self.directory + '/inputfiles/md*.inp'))
@@ -314,7 +325,7 @@ class Run(object):
             replacements['QDYN'] = 'qdyn=/proj/uucompbiochem/users/x_lucko/software/q5.10/bin/qdyn5p'
             replacements['QFEP'] = '/proj/uucompbiochem/users/x_lucko/software/q5.10/bin/qfep5'
             replacements['QCALC'] = '/proj/uucompbiochem/users/x_lucko/software/q5.10/bin/qcalc5'
-            replacements['QPREP'] = '/proj/uucompbiochem/users/x_lucko/software/q5.10/bin/qprep5'
+            replacements['QPREP'] = '/proj/uucompbiochem/users/x_lucko/software/q5.10/bin/qprep'
         elif self.cluster == 'DARDEL':
             replacements['QDYN'] = 'qdyn=/cfs/klemming/projects/supr/uucompbiochem/lucko/software/q5.10.1/bin/qdyn5p'
             replacements['QFEP'] = '/cfs/klemming/projects/supr/uucompbiochem/lucko/software/q5.10.1/bin/qfep5'
@@ -337,16 +348,18 @@ class Run(object):
                 if line.strip() == '#EQ_FILES':
                     for line in EQ_files:
                         file_base = line.split('/')[-1][:-4]
-                        outline = 'time srun $qdyn {}.inp' \
-                                   ' > {}.log\n'.format(file_base,
+                        outline = 'time srun --mpi=pmix -n {} $qdyn {}.inp' \
+                                   ' > {}.log\n'.format(ntasks,
+                                                        file_base,
                                                         file_base)
                         outfile.write(outline)
                         
                 if line.strip() == '#RUN_FILES':
                     for i, line in enumerate(MD_files):
                         file_base = line.split('/')[-1][:-4]
-                        outline = 'time srun $qdyn {}.inp'  \
-                                  ' > {}.log\n'.format(file_base,
+                        outline = 'time srun --mpi=pmix -n {} $qdyn {}.inp'  \
+                                  ' > {}.log\n'.format(ntasks,
+                                                       file_base,
                                                        file_base)
                         outfile.write(outline)     
                         
@@ -357,9 +370,25 @@ class Run(object):
                                 outfile.write('if [ $convergence -eq 1 ]; then\n')
                                 outfile.write('    break\n')
                                 outfile.write('fi\n')
+    def settimestep(self):
+        if self.timestep == '1fs':
+            self.replacements['NSTEPS1'] = '50000'
+            self.replacements['NSTEPS2'] = '10000'
+            self.replacements['STEPSIZE'] = '1.0'
+            self.replacements['STEPTOGGLE'] = 'off'
+            
+        if self.timestep == '2fs':
+            self.replacements['NSTEPS1'] = '125000'
+            self.replacements['NSTEPS2'] = '10000'
+            self.replacements['STEPSIZE'] = '2.0'
+            self.replacements['STEPTOGGLE'] = 'on' 
 
     def write_submitfile(self):
-        IO.write_submitfile(self.directory, self.replacements)                        
+        if self.scale == 'largescale':
+            replacements = IO.merge_two_dicts(self.replacements, getattr(s, self.cluster))
+            IO.write_submitfile_largescale(self.directory, replacements) 
+        else: 
+            IO.write_submitfile(self.directory, self.replacements)                        
                         
     def write_FEPfile(self):
         vdw_prms = IO.read_prm([self.ligand + '.prm'])['[atom_types]']
@@ -433,6 +462,12 @@ if __name__ == "__main__":
                         choices = ['protein', 'water', 'vacuum'],
                         help = "System type, can be protein, water or vacuum")
     
+    parser.add_argument('-ts', '--timestep',
+                        dest = "timestep",
+                        default = "1fs",
+                        choices = ['1fs','2fs'],
+                        help = "Use to specify timestep")
+    
     parser.add_argument('-P', '--preplocation',
                     dest = "preplocation",
                     default = 'LOCAL',
@@ -463,17 +498,24 @@ if __name__ == "__main__":
                         default = 10,
                         help = "Desired length of the simulation time per replicate x 10 ps")
     
+    parser.add_argument('-sc', '--scale',
+                        dest = "scale",
+                        default = 'default',
+                        help = "Scale of the run, default (1 job per replica) or large (all replicas run consecutively as a single job)")
+    
     args = parser.parse_args()
     run = Run(ligand        = args.ligand,
               cofactor      = args.cofactor,
               forcefield    = args.forcefield,
               system        = args.system,
+              timestep      = args.timestep,
               preplocation  = args.preplocation,
               cluster       = args.cluster,
               temperature   = args.temperature,
               replicates    = args.replicates,
               radius        = args.radius,
               time          = args.time,
+              scale         = args.scale,
               include       = ('ATOM', 'HETATM')
              )
     
@@ -485,6 +527,7 @@ if __name__ == "__main__":
     run.select_waters()             # 05
     run.write_qprep()               # 06
     run.run_qprep()                 # 07
+    run.settimestep()               # 15
     run.write_EQ()                  # 08
     run.write_MD()                  # 09
     run.write_runfile()             # 10

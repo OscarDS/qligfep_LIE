@@ -1,23 +1,18 @@
 !Added libraries:
 rprm PRM
-
 ! pdb input file
 rp PDB
-
 ! solvation
 set solvent_pack 2.5
 set solute_density SOLUTEDENS
 boundary 1 CENTER SPHERE
 solvate CENTER SPHERE SOLVENT
-
 ! CYX bonds
 !addbond at1 at2 y
-
 ! topology
 maketop MKC_p 
 writetop dualtop.top 
 wp top_p.pdb y 
-
 ! masked pdb file
 rt dualtop.top
 mask none 

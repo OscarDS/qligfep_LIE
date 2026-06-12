@@ -322,6 +322,20 @@ def write_submitfile(writedir, replacements):
     except:
         print(f"WARNING: Could not change permission for {submit_file}")
 
+def write_submitfile_largescale(writedir, replacements):
+    submit_tmplt = s.ROOT_DIR + '/INPUTS/FEP_submit_largescale.sh'
+    submit_file = f"{writedir}/FEP_submit.sh"
+    with open(submit_tmplt) as submit_in, open (submit_file, 'w') as submit_out:
+        for line in submit_in:
+            line = replace(line, replacements)
+            submit_out.write(line)
+
+    try:
+        st = os.stat(submit_file)
+        os.chmod(submit_file, st.st_mode | stat.S_IEXEC)
+    except:
+        print(f"WARNING: Could not change permission for {submit_file}")
+
 def write_submitfile_benchmark(writedir, replacements):
     submit_tmplt = f"{s.ROOT_DIR}/INPUTS/FEP_submit_benchmark.sh"
     submit_file = f"{writedir}/FEP_submit.sh"
