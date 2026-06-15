@@ -378,7 +378,7 @@ class Run(object):
             self.replacements['STEPTOGGLE'] = 'off'
             
         if self.timestep == '2fs':
-            self.replacements['NSTEPS1'] = '125000'
+            self.replacements['NSTEPS1'] = '1250000'
             self.replacements['NSTEPS2'] = '10000'
             self.replacements['STEPSIZE'] = '2.0'
             self.replacements['STEPTOGGLE'] = 'on' 
